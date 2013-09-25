@@ -1,0 +1,172 @@
+;; -*- mode: Outline; outline-regexp: "[;\f]+"; -*-
+Macros
+
+; Introduction
+Macros are programs that write programs.
+
+"Lisp's macro facility allows you to define operators that are implemented by transformation. The definition of a macro is essentially a function that generates Lisp code -- a program that writes programs."
+-- Paul Graham, On Lisp
+
+; A Macro is a Lisp function that transforms Lisp source code into other Lisp source code.
+;; The NULLIFY macro
+(defmacro nullify (arg)
+  (list 'setq arg 'nil))
+;; Invoking the NULLIFY macro
+(nullify *x*)
+;; What the compiler sees
+(setq *x* 'nil)
+;; MACROEXPAND-1 is a function that expands a macro invocation.
+You could evaluate this form in the REPL:
+  (macroexpand-1 '(nullify *x*))
+With SLIME, you can put your cursor on the opening parenthesis of this:
+  (nullify *x*)
+then press C-c Enter.  That's an easier way to call MACROEXPAND-1 in SLIME.
+
+; Differences between a function and a macro
+;; Invoking a macro and invoking a function have the same syntax.
+We could define a function or a macro called SHOW-STRING:
+
+  (defun show-string (s) 
+    (print s))
+
+  (defmacro show-string (s) 
+    (list 'print s))
+
+We'd invoke either one the same way:
+
+  (show-string "hello, world") ;; Macro or function invocation?
+
+;; Functions are first-class objects.
+;;; May be passed as arguments to another function.
+(mapcar '+ '(1 2 3)
+;;; May be stored in a variable.
+(let ((function '+))
+  (mapcar function '(1 2 3)))
+;; Macros are instructions for the parser.
+;;; May not be passed as arguments or stored in a variable.
+;;; Disappear after parsing -- replaced by the emitted code.
+(defmacro my-plus (&rest args)
+  (list 'apply '+ args))
+(mapcar 'my-plus '(1 2 3)) => ERROR -- MY-PLUS isn't a function.
+;; Arguments are evaluated differently.
+;;; Function arguments are evaluated before the function is called.
+(+ 1 (* 2 3))
+The function '+ receives two arguments, 1 and 6.
+;;; Macro arguments are passed to the macro unevaluated.
+(my-plus 1 (* 2 3))
+The macro MY-PLUS receives two arguments, 1 and the list '(* 2 3).
+
+; Lisp source code isn't text -- it's a parse tree of Lisp objects.
+The code that you write is an external representation of the parse tree.
+The code that the compiler operates on is an internal representation,
+made up of Lisp objects, not text.
+;; The parse tree can be built by reading text that you type.
+(print "hello, world") 
+;; The parse tree can just as well be built by calling a function that you write.
+(list 'print "hello, world")
+;; The compiler has no need to distinguish between the origins of the parse tree.
+
+; Macroexpansion "time" vs. Evaluation "time"
+"The macroexpansion step deals with expressions, and the evaluation step deals with their values."
+-- Paul Graham, On Lisp
+
+;; Macroexpansion happens first, while the code is being read.
+;;; A macro invocation is replaced by the Lisp that it produces.
+;;; Macroexpansion deals with source code, not program data.
+
+(defmacro add-one (number) 
+  (if (eql number 13)
+    (list 'error "bad luck!")
+    (list '1+ number)))
+
+(add-one 12)
+(add-one 13)     ;; Emits the error form
+(let (num 13)
+  (add-one num)) ;; Emits the 1+ form
+
+;; Evaluation happens later, maybe much later.
+;;; A macro invoked at the REPL is evaluated immediately after macroexpansion
+;;; A macro invoked inside a function definition is evaluated when the function is called
+
+; Making Lists with Backquote
+The backquote operator builds lists, just like the functions LIST and APPEND do, or much like the QUOTE special operator does.  Backquote may be more convenient to use, since its input looks a lot like its output does.  Using backquote is like filling in a template to make a list.
+
+Backquote makes macros easier to write and read.
+
+;; Without interpolation, backquote works just like quote
+
+These all produce the same list:
+
+  `(a b c) 
+  '(a b c) 
+  (list 'a 'b 'c)
+
+;; Quoting with interpolation
+;;; Comma interpolates
+The comma operator "unquotes" the next form, the value of which is inserted into the list at that point.
+
+(let ((a 1) (b 2))
+  `(a ,b)) 
+Result: (A 2)
+
+;;; Comma At-sign splices
+The comma at-sign operator also takes the value of the next form, which must be a list (unless it occurs last) and splices its values into the result.
+
+(let ((list '(one two)))
+  `(,list ,@list))
+Result: ((ONE TWO) ONE TWO)
+
+; Variable capture
+;; The problem with variable capture.
+Here we construct a new flow-control FOR loop.
+We want to avoid evaluating STOP multiple times
+because it may be a form with side-effects.
+We create a local variable LIMIT, with the value of STOP.
+But the variable LIMIT is captured
+
+(defmacro for ((var start stop) &body body)
+  `(do ((,var ,start (1+ ,var))
+        (limit ,stop))
+       ((> ,var limit))
+     ,@body))
+
+If the programmer writes
+  (for (x 1 10)
+    (print x))
+which macroexpands into 
+  (DO ((X 1 (1+ X))
+       (LIMIT 10))
+      ((> X LIMIT))
+    (PRINT X))
+the variable capture isn't a problem.
+
+The problem occurs when the programmer happens to use 
+the same variable name in the body of the loop.
+  
+  (let ((limit 42))
+    (for (x 1 10)
+      (format t "~D ~D~%" x limit)
+      (decf limit (* 10 x))))
+
+The LIMIT that's printed and decremented are the variable 
+created in the DO, not in the LET as the programmer expects.
+
+
+;; GENSYM
+;;; GENSYM creates a new symbol with a guaranteed unique identity.
+;;; We can use that new symbol safely in emitted code with no collisions possible.
+
+Here, LIMIT is created, during macroexpansion, outside of the emitted code.
+It's never used in the emitted code.  What's used instead is the result of
+the call to GENSYM -- probably something like #:G2343
+
+(defmacro for ((var start stop) &body body)
+  (let ((limit (gensym "LIMIT-")))
+    `(do ((,var ,start (1+ ,var))
+          (,limit ,stop))
+         ((> ,var ,limit))
+       ,@body)))
+
+  (let ((limit 42))
+    (for (x 1 10)
+      (decf limit))) ;; No surprises

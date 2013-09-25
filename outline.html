@@ -1,0 +1,54 @@
+<html><head title='Macros'></head><body><h1>Macros</h1><h2>Introduction</h2><p>Macros are programs that write programs.  As Paul Graham writes in On Lisp,</p><p><blockquote attribution='Paul Graham'>Lisp's macro facility allows you to define operators that are implemented by transformation. The definition of a macro is essentially a function that generates Lisp code &mdash; a program that writes programs.</blockquote></p><h2>Transforming Lisp Code into Lisp Code</h2><h3>A Quick Example</h3><h4>DEFMACRO &mdash; define a macro</h4><pre>  (defmacro nullify (arg)
+    (list 'setq arg 'nil))</pre><h4>Invoke a macro</h4><pre>  (nullify *x*)</pre><h4>The compiler sees:</h4><pre>  (setq *x* 'nil)</pre><h3>MACROEXPAND-1 &mdash "Preview" for Macros</h3><p>MACROEXPAND-1 is a function that expands a macro invocation.  At the REPL, call it with the quoted source form:</p><pre>  (macroexpand-1 '(nullify *x*))</pre><p>With SLIME you can put your cursor on the opening parenthesis of the form and press C-c Enter.  That's the easy way to macroexpand.  Either way, you'll see a preview of the code the compiler will process.</p><h2>Differences between a function and a macro</h2><h3>Invoking a macro and invoking a function have the same syntax.</h3><p>We could define a function or a macro called SHOW-STRING:</p><pre>
+  (defun show-string (s) 
+    (print s))
+  (defmacro show-string (s) 
+    (list 'print s))</pre><p>We'd invoke either one the same way:</p><pre>  (show-string "hello, world") ;; Macro or function invocation?</pre><h3>Functions are first-class objects.</h3><h4>May be passed as arguments to another function.</h4><pre>  (mapcar '+ '(1 2 3))</pre><h4>May be stored in a variable.</h4><h3>Macros are instructions for the parser.</h3><h4>May not be passed as arguments or stored in a variable.</h4><h4>Disappear after parsing -- replaced by the emitted code.</h4><pre>
+  (let ((function '+))
+    (mapcar function '(1 2 3)))
+  (defmacro my-plus (&rest args)
+    (list 'apply '+ args))
+  (mapcar 'my-plus '(1 2 3)) => ERROR -- MY-PLUS isn't a function.</pre><h3>Arguments are evaluated differently.</h3><h4>Function arguments are evaluated before the function is called.</h4><pre>  (+ 1 (* 2 3))</pre><p>The function '+ receives two arguments, 1 and 6.</p><h4>Macro arguments are passed to the macro unevaluated.</h4><pre>  (my-plus 1 (* 2 3))</pre><p>The macro MY-PLUS receives two arguments, 1 and the list (* 2 3).</p><h2>Lisp source code isn't text -- it's a parse tree of Lisp objects.</h2><p>The code that you write is an external representation of the parse tree. The code that the compiler operates on is an internal representation,made up of Lisp objects, not text.</p><h3>The parse tree can be built by reading text that you type.</h3><pre>  (print "hello, world")</pre><h3>The parse tree can just as well be built by calling a function that you write.</h3><pre>  (list 'print "hello, world")</pre><h3>The compiler doesn't distinguish between the origins of the parse tree.</h3><h2>Macroexpansion "time" vs. Evaluation "time"</h2><blockquote attribution='Paul Graham'>The macroexpansion step deals with expressions, and the evaluation step deals with their values.</blockquote><h3>Macroexpansion happens first, while the code is being read.</h3><h4>A macro invocation is replaced by the Lisp that it produces.</h4><h4>Macroexpansion deals with source code, not program data.</h4><pre>
+  (defmacro add-one (number) 
+    (if (eql number 13)
+      (list 'error "bad luck!")
+      (list '1+ number)))
+  
+  (add-one 12)
+  (add-one 13)     ;; Emits the error form
+  (let (num 13)
+    (add-one num)) ;; Emits the 1+ form</pre><h3>Evaluation happens later, maybe much later.</h3><h4>A macro invoked at the REPL is evaluated immediately after macroexpansion</h4><h4>A macro invoked inside a function definition is evaluated when the function is called</h4><h2>Making Lists with Backquote</h2><p>The backquote operator builds lists, just like the functions LIST and APPEND do, or much like the QUOTE special operator does.  Backquote may be more convenient to use, since its input looks a lot like its output does.  Using backquote is like filling in a template to make a list.</p><p>Backquote makes macros easier to write and read.</p><h3>Without interpolation, backquote works just like quote</h3><p>These all produce the same list:</p><pre>
+  `(a b c) 
+  '(a b c) 
+  (list 'a 'b 'c)</pre><h3>Quoting with interpolation</h3><h4>Comma interpolates</h4><p>The comma operator "unquotes" the next form, the value of which is inserted into the list at that point.</p><pre>
+  (let ((a 1) (b 2))
+    `(a ,b)) 
+  Result: (A 2)</pre><h4>Comma At-sign splices</h4><p>The comma at-sign operator also takes the value of the next form, which must be a list (unless it occurs last) and splices its values into the result.</p><pre>
+  (let ((list '(one two)))
+    `(,list ,@list))
+  Result: ((ONE TWO) ONE TWO)</pre><h2>Variable capture</h2><h3>The problem with variable capture.</h3><p>Here we construct a new flow-control FOR loop. We want to avoid evaluating STOP multiple times because it may be a form with side-effects. We create a local variable LIMIT, with the value of STOP. But the variable LIMIT is captured.</p><pre>
+  (defmacro for ((var start stop) &body body)
+    `(do ((,var ,start (1+ ,var))
+          (limit ,stop))
+         ((> ,var limit))
+       ,@body))</pre><p>If the programmer writes</p><pre>
+  (for (x 1 10)
+    (print x))</pre><p>which macroexpands into</p><pre>
+  (DO ((X 1 (1+ X))
+       (LIMIT 10))
+      ((> X LIMIT))
+    (PRINT X))</pre><p>the variable capture isn't a problem.</p><p>The problem occurs when the programmer happens to use the same variable name in the body of the loop.</p><pre>
+  (let ((limit 42))
+    (for (x 1 10)
+      (format t "~D ~D~%" x limit)
+      (decf limit (* 10 x))))</pre><p>The LIMIT that's printed and decremented are the variable created in the DO, not in the LET as the programmer expects.</p><h3>GENSYM</h3><h4>GENSYM creates a new symbol with a guaranteed unique identity.</h4><h4>We can use that new symbol safely in emitted code with no collisions possible.</h4><p>Here, LIMIT is created, during macroexpansion, outside of the emitted code. It's never used in the emitted code.  What's used instead is the result of the call to GENSYM -- probably something like #:G2343</p><pre>
+  (defmacro for ((var start stop) &body body)
+    (let ((limit (gensym "LIMIT-")))
+      `(do ((,var ,start (1+ ,var))
+            (,limit ,stop))
+           ((> ,var ,limit))
+         ,@body)))
+
+  (let ((limit 42))
+    (for (x 1 10)
+      (decf limit))) ;; No surprises</pre></body></html>
